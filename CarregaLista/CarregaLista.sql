@@ -1,6 +1,8 @@
 -- Limpeza básica das temporárias (caso já existam)
 IF OBJECT_ID('tempdb..#PedidosDia') IS NOT NULL DROP TABLE #PedidosDia;
 IF OBJECT_ID('tempdb..#ResumoPedidos') IS NOT NULL DROP TABLE #ResumoPedidos;
+IF OBJECT_ID('tempdb..#PedidosAtendidos') IS NOT NULL DROP TABLE #PedidosAtendidos;
+IF OBJECT_ID('tempdb..#Estoque') IS NOT NULL DROP TABLE #Estoque;
 
 
 -- Tabela temporária para receber o conteúdo do TXT
@@ -11,8 +13,8 @@ CREATE TABLE #PedidosDia (
     UPC VARCHAR(50),
     nomeProduto VARCHAR(100),
     qtd INT,
-    valor VARCHAR(20),   -- vem com vírgula
-    frete VARCHAR(20),  -- vem com vírgula
+    valor VARCHAR(20),
+    frete VARCHAR(20),
     email VARCHAR(100),
     codigoComprador VARCHAR(50),
     nomeComprador VARCHAR(100),
@@ -23,9 +25,9 @@ CREATE TABLE #PedidosDia (
 );
 
 
--- Importando o arquivo (ajustar caminho se necessário)
+-- Importando o arquivo
 BULK INSERT #PedidosDia
-FROM 'C:\temp\pedidos.txt'
+FROM './pedidos.csv'
 WITH (
     FIRSTROW = 2,
     FIELDTERMINATOR = ';',
@@ -34,38 +36,22 @@ WITH (
 );
 
 
--- Inserindo clientes (evita duplicados)
+-- Inserindo clientes
 INSERT INTO clientes (
-    codigoComprador,
-    nomeComprador,
-    email,
-    endereco,
-    CEP,
-    UF,
-    pais
+    codigoComprador, nomeComprador, email, endereco, CEP, UF, pais
 )
 SELECT DISTINCT
-    p.codigoComprador,
-    p.nomeComprador,
-    p.email,
-    p.endereco,
-    p.CEP,
-    p.UF,
-    p.pais
+    p.codigoComprador, p.nomeComprador, p.email,
+    p.endereco, p.CEP, p.UF, p.pais
 FROM #PedidosDia p
 WHERE NOT EXISTS (
-    SELECT 1
-    FROM clientes c
-    WHERE c.codigoComprador = p.codigoComprador
+    SELECT 1 FROM clientes c WHERE c.codigoComprador = p.codigoComprador
 );
 
 
--- Inserindo produtos novos
+-- Inserindo produtos
 INSERT INTO produtos (
-    SKU,
-    UPC,
-    nomeProduto,
-    valorUnitario
+    SKU, UPC, nomeProduto, valorUnitario
 )
 SELECT DISTINCT
     p.SKU,
@@ -74,19 +60,13 @@ SELECT DISTINCT
     CAST(REPLACE(p.valor, ',', '.') AS DECIMAL(10,2))
 FROM #PedidosDia p
 WHERE NOT EXISTS (
-    SELECT 1
-    FROM produtos pr
-    WHERE pr.SKU = p.SKU
+    SELECT 1 FROM produtos pr WHERE pr.SKU = p.SKU
 );
 
 
--- Cada linha do arquivo vira um item na tabela compra
+-- Inserindo itens de compra
 INSERT INTO compra (
-    codigoPedido,
-    SKU,
-    nomeProduto,
-    quantidade,
-    valorUnitario
+    codigoPedido, SKU, nomeProduto, quantidade, valorUnitario
 )
 SELECT
     p.codigoPedido,
@@ -96,15 +76,12 @@ SELECT
     CAST(REPLACE(p.valor, ',', '.') AS DECIMAL(10,2))
 FROM #PedidosDia p
 WHERE NOT EXISTS (
-    SELECT 1
-    FROM compra c
-    WHERE c.codigoPedido = p.codigoPedido
-      AND c.SKU = p.SKU
+    SELECT 1 FROM compra c 
+    WHERE c.codigoPedido = p.codigoPedido AND c.SKU = p.SKU
 );
 
 
--- Consolida o total dos pedidos
--- (soma dos itens + frete)
+-- Consolidação dos pedidos
 SELECT
     codigoPedido,
     MIN(dataPedido) AS dataPedido,
@@ -116,11 +93,9 @@ FROM #PedidosDia
 GROUP BY codigoPedido;
 
 
--- Inserindo os pedidos já com o valor total calculado
+-- Inserindo pedidos
 INSERT INTO pedidos (
-    codigoPedido,
-    codigoComprador,
-    valorTotal
+    codigoPedido, codigoComprador, valorTotal
 )
 SELECT
     r.codigoPedido,
@@ -128,29 +103,103 @@ SELECT
     r.valorItens + r.frete
 FROM #ResumoPedidos r
 WHERE NOT EXISTS (
-    SELECT 1
-    FROM pedidos p
-    WHERE p.codigoPedido = r.codigoPedido
+    SELECT 1 FROM pedidos p WHERE p.codigoPedido = r.codigoPedido
 );
 
 
--- Envia para expedição (um registro por pedido)
-INSERT INTO expedicao (
-    codigoPedido
-)
-SELECT DISTINCT
-    r.codigoPedido
-FROM #ResumoPedidos r
+-- Inserindo expedição (todos inicialmente)
+INSERT INTO expedicao (codigoPedido)
+SELECT codigoPedido
+FROM #PedidosAtendidos pa
 WHERE NOT EXISTS (
-    SELECT 1
-    FROM expedicao e
-    WHERE e.codigoPedido = r.codigoPedido
+    SELECT 1 FROM expedicao e WHERE e.codigoPedido = pa.codigoPedido
+);
+
+-- Simulação de atendimento dos pedidos (priorizando os mais caros)
+
+-- Simulação de estoque
+CREATE TABLE #Estoque (
+    SKU VARCHAR(50),
+    estoque INT
+);
+
+INSERT INTO #Estoque VALUES
+('brinq456rio', 1),
+('brinq789rio', 1),
+('roupa123rio', 1);
+
+
+-- Tabela de pedidos atendidos
+CREATE TABLE #PedidosAtendidos (
+    codigoPedido VARCHAR(20),
+    valorTotal DECIMAL(10,2)
 );
 
 
--- Conferência final
+DECLARE @codigoPedido VARCHAR(20);
+DECLARE @valorTotal DECIMAL(10,2);
+DECLARE @podeAtender BIT;
+
+
+DECLARE cursor_pedidos CURSOR FOR
+SELECT codigoPedido, (valorItens + frete) AS valorTotal
+FROM #ResumoPedidos
+ORDER BY valorTotal DESC;
+
+
+OPEN cursor_pedidos;
+FETCH NEXT FROM cursor_pedidos INTO @codigoPedido, @valorTotal;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    SET @podeAtender = 1;
+
+    -- Verifica estoque
+    IF EXISTS (
+        SELECT 1
+        FROM #PedidosDia p
+        JOIN #Estoque e ON e.SKU = p.SKU
+        WHERE p.codigoPedido = @codigoPedido
+        AND e.estoque < p.qtd
+    )
+    BEGIN
+        SET @podeAtender = 0;
+    END
+
+    -- Se puder atender
+    IF @podeAtender = 1
+    BEGIN
+        -- Baixa no estoque
+        UPDATE e
+        SET e.estoque = e.estoque - p.qtd
+        FROM #Estoque e
+        JOIN #PedidosDia p ON p.SKU = e.SKU
+        WHERE p.codigoPedido = @codigoPedido;
+
+        -- Marca como atendido
+        INSERT INTO #PedidosAtendidos
+        VALUES (@codigoPedido, @valorTotal);
+    END
+
+    FETCH NEXT FROM cursor_pedidos INTO @codigoPedido, @valorTotal;
+END
+
+CLOSE cursor_pedidos;
+DEALLOCATE cursor_pedidos;
+
+
+------------------------------------------------------------
+-- RESULTADOS
+------------------------------------------------------------
+
 SELECT * FROM clientes;
 SELECT * FROM produtos;
 SELECT * FROM compra;
 SELECT * FROM pedidos;
 SELECT * FROM expedicao;
+
+-- NOVO RESULTADO IMPORTANTE
+SELECT * FROM #PedidosAtendidos;
+
+-- Estoque final
+SELECT * FROM #Estoque;
