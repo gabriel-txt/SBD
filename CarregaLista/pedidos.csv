@@ -1,0 +1,5 @@
+codigoPedido;dataPedido;SKU;UPC;nomeProduto;qtd;valor;frete;email;codigoComprador;nomeComprador;endereco;CEP;UF;pais
+abc123;2024-03-19;brinq456rio;456;quebra-cabeca;1;43,22;5,32;samir@gmail.com;123;Samir;Rua Exemplo 1;21212322;RJ;Brasil
+abc123;2024-03-19;brinq789rio;789;jogo;1;43,22;5,32;samir@gmail.com;123;Samir;Rua Exemplo 1;21212322;RJ;Brasil
+abc789;2024-03-20;roupa123rio;123;camisa;2;47,25;6,21;teste@gmail.com;789;Fulano;Rua Exemplo 2;14784520;RJ;Brasil
+abc741;2024-03-21;brinq789rio;789;jogo;1;43,22;5,32;samir@gmail.com;123;Samir;Rua Exemplo 1;21212322;RJ;Brasil
